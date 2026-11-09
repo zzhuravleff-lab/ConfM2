@@ -1,0 +1,7 @@
+package_name: 123
+repository: https://api.nuget.org/v3/index.json
+mode: remote
+version: 13.0
+output_file: graph.jpg
+max_depth: three
+filter_substring: 5

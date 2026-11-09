@@ -1,0 +1,7 @@
+package_name: A
+repository: ftp://example.com
+mode: remote
+version: "1.0.0"
+output_file: graph.png
+max_depth: 2
+filter_substring: ""

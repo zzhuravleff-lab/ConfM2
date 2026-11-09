@@ -1,0 +1,6 @@
+package_name: Newtonsoft.Json
+repository: https://api.nuget.org/v3/index.json
+mode: remote
+version: "13.0.3"
+output_file: graph.png
+max_depth: 3
