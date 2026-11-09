@@ -4,4 +4,4 @@ mode: remote
 version: "13.0.3"
 output_file: graph.png
 max_depth: 3
-filter_substring: Test
+filter_substring: ""

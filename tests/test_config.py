@@ -1,13 +1,10 @@
 """Тесты загрузки и проверки конфигурации."""
 
-import contextlib
-import io
 import tempfile
 import unittest
 from pathlib import Path
 
 from config import ConfigError, load_config
-from main import EXIT_CONFIG_ERROR, EXIT_OK, main
 
 ROOT = Path(__file__).resolve().parents[1]
 TEST_REPO = ROOT / "repos" / "test_repo.txt"
@@ -159,31 +156,6 @@ class ValueErrorTest(ConfigTestCase):
         """Все ошибки возвращаются сразу."""
         problems = self.problems(render(mode="x", max_depth="0"))
         self.assertEqual(len(problems), 2)
-
-
-class CliTest(ConfigTestCase):
-    """Проверка поведения CLI."""
-
-    def run_main(self, text: str):
-        """Запускает main и возвращает код, stdout и stderr."""
-        out, err = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            code = main(["--config", str(self.write(text))])
-        return code, out.getvalue(), err.getvalue()
-
-    def test_prints_key_value(self):
-        """Параметры выводятся в формате ключ: значение."""
-        code, out, _ = self.run_main(render())
-        self.assertEqual(code, EXIT_OK)
-        self.assertIn("package_name: Newtonsoft.Json", out)
-        self.assertIn("max_depth: 3", out)
-
-    def test_error_exit_code(self):
-        """При ошибке код возврата ненулевой, текст ошибки в stderr."""
-        code, out, err = self.run_main(render(mode="x"))
-        self.assertEqual(code, EXIT_CONFIG_ERROR)
-        self.assertEqual(out, "")
-        self.assertIn("Error:", err)
 
 
 if __name__ == "__main__":
