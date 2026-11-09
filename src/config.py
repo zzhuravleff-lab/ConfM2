@@ -108,6 +108,16 @@ def check_filter(value: Any) -> Optional[str]:
     return None
 
 
+def check_filter_excludes_package(raw: dict[str, Any]) -> Optional[str]:
+    """Проверяет, что фильтр не исключает сам анализируемый пакет."""
+    name = raw.get("package_name")
+    substring = raw.get("filter_substring")
+    if isinstance(name, str) and isinstance(substring, str):
+        if substring and substring in name:
+            return "'filter_substring' matches 'package_name'"
+    return None
+
+
 def check_repository(value: Any, mode: str) -> Optional[str]:
     """Проверяет URL или путь к файлу в зависимости от режима."""
     if not isinstance(value, str) or not value.strip():
@@ -147,6 +157,7 @@ def find_value_problems(raw: dict[str, Any]) -> list[str]:
                 if key in raw]
     if "repository" in raw and raw.get("mode") in MODES:
         problems.append(check_repository(raw["repository"], raw["mode"]))
+    problems.append(check_filter_excludes_package(raw))
     return [problem for problem in problems if problem]
 
 

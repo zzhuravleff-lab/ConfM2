@@ -12,6 +12,9 @@ from http import HTTPStatus
 from typing import Optional
 from xml.etree.ElementTree import Element, ParseError, fromstring
 
+from errors import RepositoryError
+from graph import Ref
+
 REQUEST_TIMEOUT = 15
 USER_AGENT = "ConfM2-dependency-visualizer/1.0"
 PACKAGE_BASE_TYPE = "PackageBaseAddress/3.0.0"
@@ -21,7 +24,7 @@ SEMVER_PARTS = 3
 REVISION_PARTS = 4
 
 
-class NuGetError(Exception):
+class NuGetError(RepositoryError):
     """Ошибка получения данных из репозитория NuGet."""
 
     def __init__(self, message: str, status: Optional[int] = None):
@@ -118,15 +121,54 @@ def parse_dependencies(data: bytes) -> list[Dependency]:
     return result
 
 
-def get_direct_dependencies(
-    index_url: str, name: str, version: str
-) -> list[Dependency]:
-    """Возвращает прямые зависимости пакета заданной версии."""
-    base = find_package_base(index_url)
+def min_version(version_range: str) -> str:
+    """Выбирает минимальную версию из диапазона NuGet.
+
+    ``4.3.0`` и ``[4.3.0, )`` дают ``4.3.0``; ``[1.0, 2.0)`` дают ``1.0``.
+    """
+    text = version_range.strip()
+    if text[:1] in ("[", "("):
+        low, _, high = text[1:-1].partition(",")
+        text = low.strip() or high.strip()
+    return text
+
+
+def get_dependencies(base: str, name: str, version: str) -> list[Dependency]:
+    """Возвращает прямые зависимости пакета заданной точной версии."""
     try:
-        data = fetch_bytes(build_nuspec_url(base, name, version))
+        url = build_nuspec_url(base, name, version)
+    except ValueError as err:
+        raise NuGetError(f"cannot use version '{version}' of {name}") from err
+    try:
+        data = fetch_bytes(url)
     except NuGetError as err:
         if err.status == HTTPStatus.NOT_FOUND:
             raise NuGetError(f"package {name} {version} not found") from err
         raise
     return parse_dependencies(data)
+
+
+def unique_refs(deps: list[Dependency]) -> list[Ref]:
+    """Собирает уникальные пакеты по всем группам фреймворков.
+
+    Для повторяющихся имён берётся первая встреченная версия.
+    """
+    refs: dict[str, Ref] = {}
+    for dep in deps:
+        refs.setdefault(dep.name, Ref(dep.name, min_version(dep.version_range)))
+    return list(refs.values())
+
+
+class RemoteRepository:
+    """Реальный репозиторий NuGet, адрес которого - сервисный индекс."""
+
+    def __init__(self, index_url: str):
+        """Запоминает адрес индекса (хранилище ищется при первом запросе)."""
+        self.index_url = index_url
+        self.base: Optional[str] = None
+
+    def dependencies(self, name: str, version: str) -> list[Ref]:
+        """Возвращает прямые зависимости пакета (версия - точная)."""
+        if self.base is None:
+            self.base = find_package_base(self.index_url)
+        return unique_refs(get_dependencies(self.base, name, version))

@@ -5,6 +5,7 @@ from unittest import mock
 
 import nuget
 from fake_nuget import FLAT_PATH, FakeNuGet
+from graph import Ref
 from nuget import Dependency, NuGetError
 
 NS = "http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd"
@@ -103,33 +104,76 @@ class FindPackageBaseTest(unittest.TestCase):
             self.find(b'{"resources":[1]}')
 
 
+class MinVersionTest(unittest.TestCase):
+    """Выбор версии из диапазона NuGet."""
+
+    def test_plain_version(self):
+        """Простая версия означает нижнюю границу."""
+        self.assertEqual(nuget.min_version("4.3.0"), "4.3.0")
+
+    def test_open_upper_bound(self):
+        """Диапазон без верхней границы."""
+        self.assertEqual(nuget.min_version("[1.0.0, )"), "1.0.0")
+
+    def test_closed_range(self):
+        """Диапазон с обеими границами."""
+        self.assertEqual(nuget.min_version("[1.0, 2.0)"), "1.0")
+
+    def test_exact_version(self):
+        """Точная версия в скобках."""
+        self.assertEqual(nuget.min_version("[2.5.1]"), "2.5.1")
+
+    def test_only_upper_bound(self):
+        """Нет нижней границы - берётся верхняя."""
+        self.assertEqual(nuget.min_version("(, 3.0]"), "3.0")
+
+
+class UniqueRefsTest(unittest.TestCase):
+    """Объединение зависимостей разных фреймворков."""
+
+    def test_first_version_wins(self):
+        """Имена не повторяются, версия берётся из первой группы."""
+        deps = [Dependency("A", "1.0", "f1"), Dependency("B", "[2.0, )", "f1"),
+                Dependency("A", "3.0", "f2")]
+        self.assertEqual(nuget.unique_refs(deps),
+                         [Ref("A", "1.0"), Ref("B", "2.0")])
+
+
 class LocalServerTest(unittest.TestCase):
     """Полный сценарий через локальный HTTP-сервер."""
 
     def test_direct_dependencies(self):
         """Версия 1.0 находит пакет 1.0.0 без учёта регистра имени."""
         with FakeNuGet({NUSPEC_PATH: GROUPED}) as server:
-            deps = nuget.get_direct_dependencies(
-                server.index_url, "Demo", "1.0"
-            )
-        self.assertEqual([dep.name for dep in deps], ["Lib.A", "Lib.B"])
+            repo = nuget.RemoteRepository(server.index_url)
+            refs = repo.dependencies("Demo", "1.0")
+        self.assertEqual(refs, [Ref("Lib.A", "1.0.0"), Ref("Lib.B", "2.1.0")])
 
     def test_package_not_found(self):
         """Отсутствующий пакет даёт понятную ошибку."""
         with FakeNuGet({}) as server:
+            repo = nuget.RemoteRepository(server.index_url)
             with self.assertRaises(NuGetError) as ctx:
-                nuget.get_direct_dependencies(server.index_url, "X", "1.0")
+                repo.dependencies("X", "1.0")
         self.assertIn("not found", str(ctx.exception))
+
+    def test_unusable_version(self):
+        """Версия, из которой нельзя получить точную."""
+        with FakeNuGet({}) as server:
+            repo = nuget.RemoteRepository(server.index_url)
+            with self.assertRaises(NuGetError):
+                repo.dependencies("X", "*")
 
     def test_server_unavailable(self):
         """Недоступный сервер."""
+        repo = nuget.RemoteRepository("http://127.0.0.1:1/i")
         with self.assertRaises(NuGetError):
-            nuget.get_direct_dependencies("http://127.0.0.1:1/i", "X", "1.0")
+            repo.dependencies("X", "1.0")
 
     def test_malformed_url(self):
         """Некорректный URL."""
         with self.assertRaises(NuGetError):
-            nuget.get_direct_dependencies("not a url", "X", "1.0")
+            nuget.RemoteRepository("not a url").dependencies("X", "1.0")
 
 
 if __name__ == "__main__":

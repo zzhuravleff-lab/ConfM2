@@ -15,7 +15,7 @@
 
 - [x] Этап 1. Минимальный прототип с конфигурацией
 - [x] Этап 2. Сбор данных
-- [ ] Этап 3. Основные операции
+- [x] Этап 3. Основные операции
 - [ ] Этап 4. Дополнительные операции
 - [ ] Этап 5. Визуализация
 
@@ -26,10 +26,14 @@
 | `src/main.py`             | Точка входа, разбор аргументов, вывод        |
 | `src/config.py`           | Загрузка и проверка YAML-конфигурации        |
 | `src/nuget.py`            | Получение зависимостей из репозитория NuGet  |
+| `src/graph.py`            | Построение графа (BFS с рекурсией)           |
+| `src/file_repo.py`        | Тестовый репозиторий из файла                |
+| `src/errors.py`           | Общее исключение `RepositoryError`           |
 | `tests/`                  | Модульные тесты и локальный сервер NuGet     |
 | `configs/`                | Примеры корректных конфигураций              |
 | `configs/errors/`         | Конфигурации с ошибками для демонстрации     |
-| `repos/test_repo.txt`     | Заготовка тестового репозитория (этап 3)     |
+| `repos/`                  | Файлы тестовых репозиториев                  |
+| `configs/test/`           | Конфигурации для демонстрации тестового режима |
 | `scripts/`                | Скрипты демонстрации и запуска тестов        |
 | `run.bat`, `Makefile`     | Запуск приложения                            |
 
@@ -83,10 +87,8 @@ filter_substring: Test
 
 ## Сбор данных (этап 2)
 
-Работает в режиме `remote`. Репозиторий — адрес сервисного индекса NuGet
-API v3 (для nuget.org: `https://api.nuget.org/v3/index.json`).
-
-Алгоритм (только стандартная библиотека, без менеджеров пакетов):
+Режим `remote`. Репозиторий — адрес сервисного индекса NuGet API v3
+(для nuget.org: `https://api.nuget.org/v3/index.json`).
 
 1. Скачать сервисный индекс (JSON) и найти ресурс
    `PackageBaseAddress/3.0.0` — адрес хранилища пакетов.
@@ -97,12 +99,54 @@ API v3 (для nuget.org: `https://api.nuget.org/v3/index.json`).
    `dependency` — как из групп `group targetFramework="..."`, так и
    напрямую из `dependencies`.
 
-Выводятся все прямые зависимости: имя, диапазон версий (как записан
-в .nuspec; `*` — версия не указана) и целевой фреймворк (`any` — группы
-нет). Если зависимостей нет, выводится `(none)`.
+## Граф зависимостей (этап 3)
 
-Режим `test` пока не поддерживается (появится на этапе 3): программа
-сообщает об этом и завершается с кодом 3.
+Граф строится обходом в ширину (BFS) с рекурсией: функция `bfs`
+обрабатывает один уровень графа и рекурсивно вызывает себя для
+следующего (глубина рекурсии равна числу уровней, а не числу пакетов).
+
+Правила:
+
+- **Глубина.** Корневой пакет — уровень 0. Зависимости раскрываются,
+  пока уровень меньше `max_depth`: при `max_depth: 1` в графе только
+  прямые зависимости корня, при `2` — ещё и их зависимости и т. д.
+- **Фильтр.** Пакет, в имени которого есть `filter_substring`
+  (с учётом регистра), не попадает в граф: ни как вершина, ни как цель
+  ребра, и его зависимости не анализируются. Пустая строка — без
+  фильтра. Фильтр, совпадающий с именем самого корня, — ошибка
+  конфигурации.
+- **Циклы.** Каждый пакет раскрывается один раз (множество посещённых).
+  Ребро, замыкающее цикл, сохраняется в графе, но повторного обхода нет.
+- **Фреймворки.** В `.nuspec` зависимости разбиты по целевым
+  фреймворкам. В граф попадает объединение уникальных имён по всем
+  группам; если пакет встречается с разными версиями, берётся первая.
+- **Версии транзитивных зависимостей.** Диапазон версий заменяется его
+  нижней границей (`4.3.0` и `[4.3.0, )` -> `4.3.0`; `[1.0, 2.0)` -> `1.0`).
+  Это упрощение: реальный менеджер выбирает минимальную из
+  существующих версий, подходящих под диапазон. Версию, которую нельзя
+  определить (например `*`), или пакет, которого нет в репозитории,
+  программа сообщает ошибкой.
+
+Вывод: список смежности в порядке обхода (`пакет -> зависимости`);
+`(none)` — зависимостей нет. Пакеты на границе глубины показаны только
+как цели рёбер.
+
+### Тестовый режим
+
+В режиме `test` в `repository` указывается путь к файлу с описанием
+графа; пакеты называются заглавными латинскими буквами. Формат —
+по строке на пакет (`версия` в этом режиме не используется):
+
+```
+# комментарии и пустые строки допускаются
+A: B C
+B: D
+D:
+```
+
+Пакет, упомянутый только как зависимость, считается пакетом без
+зависимостей. Ошибки файла (нет `:`, неверное имя, пакет описан дважды,
+корневого пакета нет в файле) сообщаются с номером строки.
 
 ## Коды завершения
 
@@ -110,8 +154,8 @@ API v3 (для nuget.org: `https://api.nuget.org/v3/index.json`).
 |-----|-------------------------------------------------------|
 | 0   | Успех                                                 |
 | 1   | Ошибка конфигурации                                   |
-| 2   | Ошибка репозитория (сеть, 404, неверный JSON/XML)     |
-| 3   | Режим не поддерживается на текущем этапе              |
+| 2   | Ошибка репозитория (сеть, 404, неверный JSON/XML,     |
+|     | ошибка файла тестового репозитория)                   |
 
 ## Описание функций
 
@@ -132,13 +176,30 @@ API v3 (для nuget.org: `https://api.nuget.org/v3/index.json`).
 - `normalize_version(version)` — нормализация версии;
 - `build_nuspec_url(base, name, version)` — URL файла `.nuspec`;
 - `parse_dependencies(data)` — разбор `.nuspec`, список `Dependency`;
-- `get_direct_dependencies(index_url, name, version)` — всё вместе.
+- `min_version(range)` — нижняя граница диапазона версий;
+- `get_dependencies(base, name, version)` — зависимости точной версии;
+- `unique_refs(deps)` — уникальные пакеты по всем фреймворкам;
+- `RemoteRepository.dependencies(name, version)` — всё вместе
+  (адрес хранилища запрашивается один раз).
+
+`src/graph.py`:
+
+- `build_graph(root, get_deps, max_depth, substring)` — строит граф;
+- `bfs(level, walk, depth)` — рекурсивный обход в ширину;
+- `expand(ref, walk)` — записывает рёбра пакета, возвращает новые пакеты;
+- `is_excluded(name, substring)` — проверка фильтра.
+
+`src/file_repo.py`:
+
+- `parse_line`, `parse_table`, `load_table` — разбор файла;
+- `FileRepository.dependencies(name, version)` — зависимости пакета.
 
 `src/main.py`:
 
 - `parse_args(argv)` — разбор аргумента `--config`;
-- `print_dependencies(config, deps)` — вывод прямых зависимостей;
-- `run(config)` — получение и вывод зависимостей, код завершения;
+- `open_repository(config)` — репозиторий по режиму работы;
+- `print_graph(config, graph)` — вывод графа;
+- `run(config)` — построение и вывод графа, код завершения;
 - `main(argv)` — запуск приложения.
 
 ## Сборка и запуск
@@ -176,30 +237,98 @@ HTTP-сервер (`tests/fake_nuget.py`).
 
 ## Примеры использования
 
-Формат вывода (список зависимостей зависит от пакета и версии):
+Реальный репозиторий (`mode: remote`, нужен интернет):
 
 ```
 > python src/main.py --config configs/config.yaml
-Direct dependencies of Newtonsoft.Json 13.0.3:
-  Microsoft.CSharp 4.3.0 [.NETStandard1.0]
-  NETStandard.Library 1.6.1 [.NETStandard1.0]
-  System.ComponentModel.TypeConverter 4.3.0 [.NETStandard1.0]
-  System.Runtime.Serialization.Primitives 4.3.0 [.NETStandard1.0]
-  Microsoft.CSharp 4.3.0 [.NETStandard1.3]
-  NETStandard.Library 1.6.1 [.NETStandard1.3]
-  System.ComponentModel.TypeConverter 4.3.0 [.NETStandard1.3]
-  System.Runtime.Serialization.Formatters 4.3.0 [.NETStandard1.3]
-  System.Runtime.Serialization.Primitives 4.3.0 [.NETStandard1.3]
-  System.Xml.XmlDocument 4.3.0 [.NETStandard1.3]
-  
-  <имя> <диапазон версий> [<целевой фреймворк>]
 ```
 
-Пакет не найден:
+Тестовый репозиторий `repos/test_repo.txt` (граф с общей зависимостью D
+и циклом B -> D -> F -> B). Все запуски сразу — `scripts\demo_test_repo.bat`.
 
 ```
-> python src/main.py --config configs/config_missing.yaml
-Error: package Missing.Package 1.0.0 not found
+A: B C
+B: D
+C: D E
+D: F
+E:
+F: B
+```
+
+Полный граф (`configs/test/full.yaml`, глубина 10):
+
+```
+> python src/main.py --config configs/test/full.yaml
+Dependency graph of A 1.0.0 (max depth 10):
+  A -> B, C
+  B -> D
+  C -> D, E
+  D -> F
+  E -> (none)
+  F -> B
+```
+
+Глубина 1 и 2 (`depth1.yaml`, `depth2.yaml`):
+
+```
+Dependency graph of A 1.0.0 (max depth 1):
+  A -> B, C
+
+Dependency graph of A 1.0.0 (max depth 2):
+  A -> B, C
+  B -> D
+  C -> D, E
+```
+
+Фильтр `D` (`filter.yaml`) — пакет D и всё, что за ним, исключено:
+
+```
+Dependency graph of A 1.0.0 (max depth 10):
+  A -> B, C
+  B -> (none)
+  C -> E
+  E -> (none)
+```
+
+Другой корневой пакет (`subtree.yaml`, корень C):
+
+```
+Dependency graph of C 1.0.0 (max depth 10):
+  C -> D, E
+  D -> F
+  E -> (none)
+  F -> B
+  B -> D
+```
+
+Циклы (`cycle.yaml`, `self_loop.yaml`):
+
+```
+Dependency graph of A 1.0.0 (max depth 10):
+  A -> B
+  B -> C
+  C -> A
+
+Dependency graph of A 1.0.0 (max depth 10):
+  A -> A, B
+  B -> C
+  C -> (none)
+```
+
+Ошибки тестового режима:
+
+```
+> python src/main.py --config configs/test/missing_root.yaml
+Error: package Z not found in test repository
+
+> python src/main.py --config configs/test/bad_names.yaml
+Error: line 2: invalid package name 'b' (capital Latin letters only)
+
+> python src/main.py --config configs/test/bad_syntax.yaml
+Error: line 1: expected 'A: B C'
+
+> python src/main.py --config configs/test/filter_root.yaml
+Error: 'filter_substring' matches 'package_name'
 ```
 
 Ошибки конфигурации (все примеры лежат в `configs/errors/`, запуск всех

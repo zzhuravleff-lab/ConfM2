@@ -143,6 +143,12 @@ class ValueErrorTest(ConfigTestCase):
         """Подстрока фильтра не строка."""
         self.assert_one_problem("filter_substring", "5")
 
+    def test_filter_matches_package(self):
+        """Фильтр исключает сам анализируемый пакет."""
+        problems = self.problems(render(filter_substring="Json"))
+        self.assertEqual(len(problems), 1)
+        self.assertIn("filter_substring", problems[0])
+
     def test_bad_url(self):
         """Неверная схема URL в режиме remote."""
         self.assert_one_problem("repository", "ftp://example.com")

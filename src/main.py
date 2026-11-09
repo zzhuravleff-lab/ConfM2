@@ -3,16 +3,20 @@
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional, Sequence, Union
 
 from config import MODE_REMOTE, Config, ConfigError, load_config
-from nuget import Dependency, NuGetError, get_direct_dependencies
+from errors import RepositoryError
+from file_repo import FileRepository
+from graph import Ref, build_graph
+from nuget import RemoteRepository
+
+Repository = Union[RemoteRepository, FileRepository]
 
 DEFAULT_CONFIG = "configs/config.yaml"
 EXIT_OK = 0
 EXIT_CONFIG_ERROR = 1
 EXIT_REPOSITORY_ERROR = 2
-EXIT_UNSUPPORTED = 3
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -28,33 +32,42 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def format_dependency(dep: Dependency) -> str:
-    """Форматирует зависимость для вывода на экран."""
-    return f"  {dep.name} {dep.version_range} [{dep.framework}]"
+def open_repository(config: Config) -> Repository:
+    """Создаёт репозиторий в соответствии с режимом работы."""
+    if config.mode == MODE_REMOTE:
+        return RemoteRepository(config.repository)
+    return FileRepository(Path(config.repository))
 
 
-def print_dependencies(config: Config, deps: list[Dependency]) -> None:
-    """Выводит все прямые зависимости пакета."""
-    print(f"Direct dependencies of {config.package_name} {config.version}:")
-    if not deps:
-        print("  (none)")
-    for dep in deps:
-        print(format_dependency(dep))
+def format_edges(name: str, targets: list[str]) -> str:
+    """Форматирует одну строку графа: пакет -> его зависимости."""
+    return f"  {name} -> {', '.join(targets) or '(none)'}"
+
+
+def print_graph(config: Config, graph: dict[str, list[str]]) -> None:
+    """Выводит граф зависимостей в виде списка смежности."""
+    print(
+        f"Dependency graph of {config.package_name} {config.version} "
+        f"(max depth {config.max_depth}):"
+    )
+    for name, targets in graph.items():
+        print(format_edges(name, targets))
 
 
 def run(config: Config) -> int:
-    """Получает и выводит прямые зависимости, возвращает код завершения."""
-    if config.mode != MODE_REMOTE:
-        print("Error: test mode is not supported yet", file=sys.stderr)
-        return EXIT_UNSUPPORTED
+    """Строит и выводит граф зависимостей, возвращает код завершения."""
     try:
-        deps = get_direct_dependencies(
-            config.repository, config.package_name, config.version
+        repository = open_repository(config)
+        graph = build_graph(
+            Ref(config.package_name, config.version),
+            repository.dependencies,
+            config.max_depth,
+            config.filter_substring,
         )
-    except NuGetError as err:
+    except RepositoryError as err:
         print(f"Error: {err}", file=sys.stderr)
         return EXIT_REPOSITORY_ERROR
-    print_dependencies(config, deps)
+    print_graph(config, graph)
     return EXIT_OK
 
 
